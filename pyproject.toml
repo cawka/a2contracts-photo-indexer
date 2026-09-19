@@ -1,0 +1,25 @@
+[project]
+name = "a2contracts-photo-indexer"
+version = "0.1.0"
+description = "Runs the AI models for A2 Contracts' project photos (captions, tags, embeddings) on your own GPU box or laptop and posts the results to the app through its REST API."
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+    "pillow>=10",
+    "numpy>=1.26",
+    "transformers>=4.57",
+    "accelerate>=1.0",
+    "open_clip_torch>=2.32",
+    "timm>=1.0",
+    "sentencepiece",
+]
+
+[project.scripts]
+a2-photo-indexer = "a2contracts_photo_indexer.indexer:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["a2contracts_photo_indexer*"]
