@@ -59,7 +59,14 @@ caption; a photo whose models fail is recorded with the tag
 name to retry). Ctrl-C stops cleanly after the current photo.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
-### Unattended on the GPU box (systemd user unit)
+## Running on a schedule
+
+Two ways: keep `a2-photo-indexer run` alive (it polls every 2 minutes,
+`--interval`), or fire `run --once` every so often -- the better fit for
+a machine that sleeps, since every run processes whatever piled up and
+exits. Both need the one-time `login` on that machine first.
+
+### Linux GPU box -- systemd user unit (always on)
 
 ```ini
 # ~/.config/systemd/user/a2-photo-indexer.service
@@ -77,10 +84,88 @@ RestartSec=30
 WantedBy=default.target
 ```
 
-`systemctl --user enable --now a2-photo-indexer` (and `loginctl
-enable-linger $USER` so it runs without a login session). On the Mac,
-`a2-photo-indexer run --once` from a terminal, or a `launchd` agent with
-the same command, does the same job whenever the laptop is open.
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now a2-photo-indexer
+loginctl enable-linger $USER          # keep it running with nobody logged in
+journalctl --user -u a2-photo-indexer -f
+```
+
+### macOS -- launchd agent (every 30 minutes while the Mac is awake)
+
+`~/Library/LaunchAgents/com.a2cons.photo-indexer.plist` (adjust the two
+paths to where the repo is; `StartInterval` is seconds):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.a2cons.photo-indexer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/cawka/Devel/a2contracts-photo-indexer/.venv/bin/a2-photo-indexer</string>
+    <string>run</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>A2_API</key><string>https://contracts.a2cons.com</string></dict>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
+  <key>StandardErrorPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
+</dict>
+</plist>
+```
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.a2cons.photo-indexer.plist   # install + start
+launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer                              # run it now
+tail -f ~/Library/Logs/a2-photo-indexer.log
+launchctl bootout gui/$(id -u)/com.a2cons.photo-indexer                                   # remove
+```
+
+launchd skips the interval while the Mac sleeps and runs a missed job
+on wake, so a laptop simply catches up when it is opened. Two runs never
+overlap (launchd starts the next only after the previous exited). The
+first run downloads the models (a few GB) -- do that one from a terminal
+with `a2-photo-indexer run --once` so you can watch it.
+
+### Windows 11 -- Task Scheduler (every 30 minutes)
+
+Install (PowerShell, in the cloned repo):
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # NVIDIA
+pip install -e .
+setx A2_API https://contracts.a2cons.com                                             # for future shells and the task
+a2-photo-indexer login
+a2-photo-indexer run --once                                                          # first run: model download
+```
+
+The token file is `%USERPROFILE%\.a2contracts\photo-indexer.json`. Then
+schedule it (one line, PowerShell, adjust the path):
+
+```powershell
+schtasks /Create /TN "A2 photo indexer" /SC MINUTE /MO 30 /F `
+  /TR "\"$env:USERPROFILE\a2contracts-photo-indexer\.venv\Scripts\a2-photo-indexer.exe\" run --once --api https://contracts.a2cons.com"
+schtasks /Run /TN "A2 photo indexer"       # run it now
+schtasks /Query /TN "A2 photo indexer" /V /FO LIST | findstr /C:"Last Run" /C:"Last Result"
+schtasks /Delete /TN "A2 photo indexer" /F  # remove
+```
+
+Or in the Task Scheduler app: Create Task → Triggers: "Daily, repeat
+every 30 minutes for a duration of 1 day" → Actions: the
+`.venv\Scripts\a2-photo-indexer.exe` above with arguments
+`run --once --api https://contracts.a2cons.com` → Settings: tick "Run
+task as soon as possible after a scheduled start is missed" and "Do not
+start a new instance" (so a long pass is never doubled). Leave "Run only
+when user is logged on" unless you also want it while signed out (then
+it asks for your Windows password and runs without a console). Output
+goes nowhere by default: add `>> %USERPROFILE%\a2-photo-indexer.log 2>&1`
+to the arguments through `cmd /c "... "` if you want a log.
 
 ## What the app does with it
 
