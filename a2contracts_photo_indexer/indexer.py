@@ -222,7 +222,7 @@ class QwenCaptioner:
 
         dtype = torch.float16 if device in ('cuda', 'mps') else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForImageTextToText.from_pretrained(model_name, torch_dtype=dtype, device_map=device if device == 'cuda' else None)
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name, dtype=dtype, device_map=device if device == 'cuda' else None)
         if device != 'cuda':
             self.model = self.model.to(device)
         self.model.eval()
@@ -248,7 +248,7 @@ class FlorenceCaptioner:
 
         dtype = torch.float16 if device == 'cuda' else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, trust_remote_code=True).to(device).eval()
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype, trust_remote_code=True).to(device).eval()
         self.device, self.dtype, self.torch = device, dtype, torch
         self.name = model_name.split('/')[-1]
 
