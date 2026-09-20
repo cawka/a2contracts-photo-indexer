@@ -59,6 +59,33 @@ caption; a photo whose models fail is recorded with the tag
 name to retry). Ctrl-C stops cleanly after the current photo.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
+## Videos: `transcode`
+
+The same worker also encodes videos (the server only probes a clip and
+takes a poster). `a2-photo-indexer transcode --api … [--once]` asks for
+pending videos and, per the owner's design:
+
+- a **short clip** (up to the server's `VIDEO_SHORT_SECONDS`, 3 min) → one
+  H.264 MP4, capped at 1080p, for browsers that can't decode the iPhone's
+  HEVC (iOS/Safari keep playing the original by byte range);
+- a **long video** → an HLS ladder (1080p / 720p / 480p, capped at the
+  source), 6-second segments, uploaded as a ZIP of the folder.
+
+HDR sources (PQ/HLG) are tone-mapped to SDR — needs an ffmpeg with the
+`zscale` filter (libzimg): Homebrew's and Ubuntu's `ffmpeg` have it, some
+static builds don't (the tool warns and encodes flat). The encoder is
+picked automatically: NVENC on an NVIDIA box, VideoToolbox on a Mac,
+x264 otherwise (`--encoder h264_nvenc|h264_videotoolbox|libx264`).
+Uploads are resumable (tus, 8 MB chunks). Run it the same way as `run`
+— a second unit/agent/task with `transcode` instead of `run`, or one
+after the other in a script:
+
+```sh
+a2-photo-indexer run --once && a2-photo-indexer transcode --once
+```
+
+`status` shows both queues.
+
 ## Running on a schedule
 
 Two ways: keep `a2-photo-indexer run` alive (it polls every 2 minutes,
@@ -168,6 +195,11 @@ goes nowhere by default: add `>> %USERPROFILE%\a2-photo-indexer.log 2>&1`
 to the arguments through `cmd /c "... "` if you want a log.
 
 ## What the app does with it
+
+Videos: the lightbox plays the HLS ladder (hls.js, or natively on
+iOS/Safari), else the original when the browser can decode it, else the
+MP4 rendition; the iOS app plays the original or the HLS master with
+AVPlayer.
 
 - Photos tab search box: your captions + AI captions + tags, stemmed
   ("panels" finds "electrical panel"); staff see the AI caption and tags
