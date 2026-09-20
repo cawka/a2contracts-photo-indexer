@@ -14,9 +14,10 @@ and posts them back. Nothing leaves the owner's machines but the results.
 
 Usage (see README.md):
 
-    a2-photo-indexer login  --api https://contracts.a2cons.com
-    a2-photo-indexer run    --api https://contracts.a2cons.com [--once]
-    a2-photo-indexer status --api https://contracts.a2cons.com
+    a2-photo-indexer login     --api https://contracts.a2cons.com
+    a2-photo-indexer run       --api https://contracts.a2cons.com [--once]   # AI index
+    a2-photo-indexer transcode --api https://contracts.a2cons.com [--once]   # video renditions (transcode.py)
+    a2-photo-indexer status    --api https://contracts.a2cons.com
 
 The device-token pair from `login` is kept in ~/.a2contracts/photo-indexer.json
 (mode 600) and refreshed automatically; `run` loops until stopped
@@ -114,10 +115,11 @@ class Api:
         self._save()
         return True
 
-    def request(self, method: str, path: str, *, retry_auth: bool = True, **kw):
-        r = self.http.request(method, f'{self.base}{path}', headers=self._headers(), timeout=kw.pop('timeout', 120), **kw)
+    def request(self, method: str, path: str, *, retry_auth: bool = True, headers_extra: dict | None = None, **kw):
+        headers = {**self._headers(), **(headers_extra or {})}
+        r = self.http.request(method, f'{self.base}{path}', headers=headers, timeout=kw.pop('timeout', 120), **kw)
         if r.status_code == 401 and retry_auth and self._refresh():
-            return self.request(method, path, retry_auth=False, **kw)
+            return self.request(method, path, retry_auth=False, headers_extra=headers_extra, **kw)
         if r.status_code == 401:
             sys.exit(f'Session expired -- run: a2-photo-indexer login --api {self.base}')
         return r
@@ -330,7 +332,7 @@ def run(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='A2 Contracts photo indexer')
-    parser.add_argument('command', choices=['login', 'run', 'status'])
+    parser.add_argument('command', choices=['login', 'run', 'status', 'transcode'])
     parser.add_argument('--api', default=os.environ.get('A2_API', 'https://contracts.a2cons.com'))
     parser.add_argument('--captioner', choices=['qwen', 'florence', 'none'], default='qwen')
     parser.add_argument('--qwen-model', default='Qwen/Qwen3-VL-8B-Instruct')
@@ -341,12 +343,19 @@ def main() -> None:
     parser.add_argument('--batch', type=int, default=16, help='photos fetched per round')
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
+    parser.add_argument('--ffmpeg', default=os.environ.get('FFMPEG', 'ffmpeg'), help='transcode: the ffmpeg binary')
+    parser.add_argument('--ffprobe', default=os.environ.get('FFPROBE', 'ffprobe'), help='transcode: the ffprobe binary')
+    parser.add_argument('--encoder', default='auto', help='transcode: auto | h264_nvenc | h264_videotoolbox | libx264')
     args = parser.parse_args()
     if args.command == 'login':
         Api(args.api).login()
     elif args.command == 'status':
         api = Api(args.api)
-        print(json.dumps(api.stats(''), indent=2))
+        print(json.dumps({'photos': api.stats(''), 'videos': api.request('GET', '/api/ai/videos/stats/').json()}, indent=2))
+    elif args.command == 'transcode':
+        from .transcode import run_transcode
+
+        run_transcode(Api(args.api), args)
     else:
         run(args)
 
