@@ -36,6 +36,9 @@ import os
 import re
 import signal
 import socket
+
+# What the app's queue shows as the holder of a lease (`status`).
+WORKER = os.environ.get('A2_WORKER') or socket.gethostname()
 import sys
 import time
 from pathlib import Path
@@ -125,7 +128,9 @@ class Api:
         return r
 
     def pending(self, model: str, limit: int) -> list[dict]:
-        r = self.request('GET', f'/api/ai/photos/pending/?model={requests.utils.quote(model)}&limit={limit}')
+        # The rows come back leased to this worker (`worker` names it in
+        # the app's queue): a second machine polling gets other rows.
+        r = self.request('GET', f'/api/ai/photos/pending/?model={requests.utils.quote(model)}&limit={limit}&worker={requests.utils.quote(WORKER)}')
         r.raise_for_status()
         return r.json()
 
@@ -294,7 +299,8 @@ def run(args) -> None:
         stats = api.stats(model_name)
         pending = api.pending(model_name, args.batch)
         if not pending:
-            print(f'nothing pending ({stats["indexed"]}/{stats["total"]} indexed)')
+            busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
+            print(f'nothing pending ({stats["indexed"]}/{stats["total"]} indexed{busy})')
             if args.once:
                 return
             for _ in range(args.interval):

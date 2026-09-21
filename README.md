@@ -86,6 +86,17 @@ a2-photo-indexer run --once && a2-photo-indexer transcode --once
 
 `status` shows both queues.
 
+## Two machines at once
+
+Run `run` (and/or `transcode`) on the Mac and the GPU box at the same
+time: the app leases each row it hands out to the worker that asked
+(named by `A2_WORKER` in the environment, else the hostname) for 30
+minutes (3 hours for a video), so the other machine gets the next rows
+instead of the same ones. A worker that dies mid-batch just lets its
+leases expire and those photos are handed out again; `status` shows
+`in_progress` = rows currently with a worker. Nothing to configure --
+start both.
+
 ## Running on a schedule
 
 Two ways: keep `a2-photo-indexer run` alive (it polls every 2 minutes,

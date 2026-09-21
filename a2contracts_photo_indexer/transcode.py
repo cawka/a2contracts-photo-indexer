@@ -183,12 +183,15 @@ def run_transcode(api, args) -> None:
         sys.exit('ffmpeg/ffprobe not found on the PATH (brew install ffmpeg / apt install ffmpeg).')
     print(f'encoder: {pick_encoder(ffmpeg, args.encoder)[0]}')
     while True:
-        r = api.request('GET', f'/api/ai/videos/pending/?limit={args.batch}')
+        from .indexer import WORKER
+
+        r = api.request('GET', f'/api/ai/videos/pending/?limit={args.batch}&worker={WORKER}')
         r.raise_for_status()
         pending = r.json()
         stats = api.request('GET', '/api/ai/videos/stats/').json()
         if not pending:
-            print(f'nothing pending ({stats["encoded"]}/{stats["total"]} videos encoded)')
+            busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
+            print(f'nothing pending ({stats["encoded"]}/{stats["total"]} videos encoded{busy})')
             if args.once:
                 return
             time.sleep(args.interval)
