@@ -205,6 +205,9 @@ PROMPT = (
 
 
 def _parse_vlm(text: str) -> tuple[str, list[str]]:
+    """The model's JSON, or what can be salvaged from one cut off by the
+    token limit (a long caption plus eight tags can overrun it: seen
+    2026-09-21, one photo stored its raw half-JSON as the caption)."""
     match = re.search(r'\{.*\}', text, re.S)
     if match:
         try:
@@ -215,6 +218,11 @@ def _parse_vlm(text: str) -> tuple[str, list[str]]:
                 return caption, tags[:8]
         except ValueError:
             pass
+    caption = re.search(r'"caption"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.S)
+    if caption:
+        tags_part = text[caption.end():]
+        tags = re.findall(r'"((?:[^"\\]|\\.)+)"', tags_part.split('[', 1)[1]) if '[' in tags_part else []
+        return caption.group(1).strip()[:600], [t.strip() for t in tags if t.strip() and t.strip() != 'tags'][:8]
     return text.strip()[:600], []
 
 
@@ -239,7 +247,7 @@ class QwenCaptioner:
         messages = [{'role': 'user', 'content': [{'type': 'image', 'image': image}, {'type': 'text', 'text': PROMPT}]}]
         inputs = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors='pt').to(self.model.device)
         with self.torch.no_grad():
-            out = self.model.generate(**inputs, max_new_tokens=200, do_sample=False)
+            out = self.model.generate(**inputs, max_new_tokens=320, do_sample=False)
         text = self.processor.batch_decode(out[:, inputs['input_ids'].shape[1]:], skip_special_tokens=True)[0]
         return _parse_vlm(text)
 
