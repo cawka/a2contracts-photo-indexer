@@ -144,6 +144,16 @@ class Api:
         r.raise_for_status()
         return r.content
 
+    def release(self, purpose: str, ids: list[int]) -> None:
+        """Hands back leased rows this worker will not get to (a stop
+        mid-batch), so they are pending again at once."""
+        if not ids:
+            return
+        try:
+            self.request('POST', '/api/ai/claims/release/', json={'purpose': purpose, 'ids': ids}, timeout=30)
+        except Exception as exc:  # noqa: BLE001 -- the lease expires on its own anyway
+            print(f'could not release {len(ids)} rows: {exc}', file=sys.stderr)
+
     def post_index(self, photo_id: int, payload: dict) -> None:
         r = self.request('POST', f'/api/ai/photos/{photo_id}/index/', json=payload)
         if r.status_code != 200:
@@ -317,8 +327,9 @@ def run(args) -> None:
                 time.sleep(1)
             continue
         print(f'{stats["pending"]} pending; taking {len(pending)}')
-        for row in pending:
+        for n, row in enumerate(pending):
             if stop['now']:
+                api.release('index', [r['id'] for r in pending[n:]])
                 return
             started = time.time()
             try:

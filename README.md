@@ -95,7 +95,9 @@ minutes (3 hours for a video), so the other machine gets the next rows
 instead of the same ones. A worker that dies mid-batch just lets its
 leases expire and those photos are handed out again; `status` shows
 `in_progress` = rows currently with a worker. Nothing to configure --
-start both.
+start both. Ctrl-C is clean: the photo being captioned finishes and is
+posted, the rest of the batch is handed back to the queue at once
+(only a crash or a lost network leaves rows to expire).
 
 ## Running on a schedule
 

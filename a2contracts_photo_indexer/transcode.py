@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -182,7 +183,10 @@ def run_transcode(api, args) -> None:
     if not shutil.which(ffmpeg) or not shutil.which(ffprobe):
         sys.exit('ffmpeg/ffprobe not found on the PATH (brew install ffmpeg / apt install ffmpeg).')
     print(f'encoder: {pick_encoder(ffmpeg, args.encoder)[0]}')
-    while True:
+    stop = {'now': False}
+    signal.signal(signal.SIGINT, lambda *_: stop.__setitem__('now', True))
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
+    while not stop['now']:
         from .indexer import WORKER
 
         r = api.request('GET', f'/api/ai/videos/pending/?limit={args.batch}&worker={WORKER}')
@@ -194,10 +198,16 @@ def run_transcode(api, args) -> None:
             print(f'nothing pending ({stats["encoded"]}/{stats["total"]} videos encoded{busy})')
             if args.once:
                 return
-            time.sleep(args.interval)
+            for _ in range(args.interval):
+                if stop['now']:
+                    return
+                time.sleep(1)
             continue
         print(f'{stats["pending"]} pending; taking {len(pending)}')
-        for row in pending:
+        for n, row in enumerate(pending):
+            if stop['now']:
+                api.release('transcode', [r['id'] for r in pending[n:]])
+                return
             started = time.time()
             with tempfile.TemporaryDirectory(prefix='a2-video-') as tmp:
                 try:
