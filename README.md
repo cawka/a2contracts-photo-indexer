@@ -34,9 +34,19 @@ python3 -m venv .venv && source .venv/bin/activate
 # torch for your hardware -- pick one:
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # NVIDIA (CUDA 12.8)
 pip install torch torchvision                                                       # Apple silicon (MPS) / CPU
-pip install -e .
+pip install -e .            # Mac
+pip install -e '.[cuda]'    # NVIDIA: adds bitsandbytes for 4-bit weights
 a2-photo-indexer login --api https://contracts.a2cons.com      # email, password, MFA code
 ```
+
+**Memory.** Qwen3-VL-8B is ~16 GB of weights at full precision. The Mac
+holds it whole in unified memory. On an NVIDIA card under 20 GB (the
+5060 Ti's 16) `--quantize auto` (the default) loads it 4-bit (NF4,
+~5.5 GB, everything stays on the GPU at full speed; captions are not
+noticeably different -- a point or two on benchmarks). `--quantize
+none|4bit|8bit` overrides. The precision is not part of the index's
+model name: the Mac at full precision and the box at 4-bit work one
+queue, and a photo either of them captioned is done for both.
 
 `login` must be a **company admin** account (the indexer reads every photo
 of the company). The token pair lands in `~/.a2contracts/photo-indexer.json`
@@ -193,7 +203,7 @@ Install (PowerShell, in the cloned repo):
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # NVIDIA
-pip install -e .
+pip install -e .[cuda]
 setx A2_API https://contracts.a2cons.com                                             # for future shells and the task
 a2-photo-indexer login
 a2-photo-indexer run --once                                                          # first run: model download

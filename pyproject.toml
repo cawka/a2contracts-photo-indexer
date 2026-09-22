@@ -14,6 +14,9 @@ dependencies = [
     "sentencepiece",
 ]
 
+[project.optional-dependencies]
+cuda = ["bitsandbytes>=0.45"]  # 4-bit/8-bit weights on an NVIDIA GPU (--quantize)
+
 [project.scripts]
 a2-photo-indexer = "a2contracts_photo_indexer.indexer:main"
 

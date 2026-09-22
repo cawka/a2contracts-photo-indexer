@@ -236,21 +236,52 @@ def _parse_vlm(text: str) -> tuple[str, list[str]]:
     return text.strip()[:600], []
 
 
+def pick_quantization(requested: str, device: str) -> str:
+    """`auto`: 4-bit on a CUDA card with less than 20 GB, where the 8B
+    model's ~16 GB of bf16 weights would not fit beside the activations
+    (the owner's 5060 Ti has 16); full precision everywhere else (the
+    Mac's unified memory holds it whole). NF4 costs a point or two on
+    benchmarks and nothing anyone would notice in a jobsite caption."""
+    if requested != 'auto':
+        return requested
+    if device != 'cuda':
+        return 'none'
+    import torch
+
+    total_gb = torch.cuda.get_device_properties(0).total_memory / 2**30
+    return '4bit' if total_gb < 20 else 'none'
+
+
 class QwenCaptioner:
     """Caption + tags from a Qwen VL model (2.5-VL or 3-VL) via transformers."""
 
-    def __init__(self, model_name: str, device: str):
+    def __init__(self, model_name: str, device: str, quantize: str = 'none'):
         import torch
         from transformers import AutoModelForImageTextToText, AutoProcessor
 
-        dtype = torch.float16 if device in ('cuda', 'mps') else torch.float32
+        dtype = torch.bfloat16 if device == 'cuda' else torch.float16 if device == 'mps' else torch.float32
         self.processor = AutoProcessor.from_pretrained(model_name)
-        self.model = AutoModelForImageTextToText.from_pretrained(model_name, dtype=dtype, device_map=device if device == 'cuda' else None)
+        extra = {}
+        if quantize in ('4bit', '8bit'):
+            if device != 'cuda':
+                sys.exit('--quantize needs a CUDA GPU (bitsandbytes); on a Mac run at full precision.')
+            try:
+                from transformers import BitsAndBytesConfig
+                import bitsandbytes  # noqa: F401 -- the import is the check
+            except ImportError:
+                sys.exit('pip install bitsandbytes   (for --quantize on an NVIDIA GPU)')
+            extra['quantization_config'] = (
+                BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.bfloat16)
+                if quantize == '4bit' else BitsAndBytesConfig(load_in_8bit=True)
+            )
+        self.model = AutoModelForImageTextToText.from_pretrained(model_name, dtype=dtype, device_map=device if device == 'cuda' else None, **extra)
         if device != 'cuda':
             self.model = self.model.to(device)
         self.model.eval()
         self.device = device
         self.torch = torch
+        # The same name whatever the precision: the Mac (full) and the GPU
+        # box (4-bit) work ONE queue, and a photo either machine did is done.
         self.name = model_name.split('/')[-1]
 
     def ask(self, images, prompt: str, max_new_tokens: int = 320) -> str:
@@ -308,7 +339,9 @@ def run(args) -> None:
     print(f'device: {device}')
     captioner = None
     if args.captioner == 'qwen':
-        captioner = QwenCaptioner(args.qwen_model, device)
+        quantize = pick_quantization(args.quantize, device)
+        print(f'quantization: {quantize}')
+        captioner = QwenCaptioner(args.qwen_model, device, quantize)
     elif args.captioner == 'florence':
         captioner = FlorenceCaptioner(args.florence_model, device)
     embedder = SiglipEmbedder(args.siglip_model, device) if args.embedder == 'siglip' else None
@@ -376,6 +409,7 @@ def main() -> None:
     parser.add_argument('--embedder', choices=['siglip', 'none'], default='siglip')
     parser.add_argument('--siglip-model', default='ViT-SO400M-14-SigLIP-384')
     parser.add_argument('--device', default='auto', help='auto | cuda | mps | cpu')
+    parser.add_argument('--quantize', default='auto', help='auto | none | 4bit | 8bit -- weights precision for the captioner (CUDA only; auto = 4bit on a card under 20 GB)')
     parser.add_argument('--batch', type=int, default=16, help='photos fetched per round')
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
