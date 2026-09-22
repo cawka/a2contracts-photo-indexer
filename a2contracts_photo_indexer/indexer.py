@@ -253,13 +253,19 @@ class QwenCaptioner:
         self.torch = torch
         self.name = model_name.split('/')[-1]
 
-    def __call__(self, image) -> tuple[str, list[str]]:
-        messages = [{'role': 'user', 'content': [{'type': 'image', 'image': image}, {'type': 'text', 'text': PROMPT}]}]
+    def ask(self, images, prompt: str, max_new_tokens: int = 320) -> str:
+        """One free-form question over one or more images -- the photo
+        caption and the plan title-block reading (plans.py) both go
+        through here."""
+        content = [{'type': 'image', 'image': image} for image in (images if isinstance(images, (list, tuple)) else [images])]
+        messages = [{'role': 'user', 'content': [*content, {'type': 'text', 'text': prompt}]}]
         inputs = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors='pt').to(self.model.device)
         with self.torch.no_grad():
-            out = self.model.generate(**inputs, max_new_tokens=320, do_sample=False)
-        text = self.processor.batch_decode(out[:, inputs['input_ids'].shape[1]:], skip_special_tokens=True)[0]
-        return _parse_vlm(text)
+            out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        return self.processor.batch_decode(out[:, inputs['input_ids'].shape[1]:], skip_special_tokens=True)[0]
+
+    def __call__(self, image) -> tuple[str, list[str]]:
+        return _parse_vlm(self.ask(image, PROMPT))
 
 
 class FlorenceCaptioner:
@@ -313,10 +319,15 @@ def run(args) -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__('now', True))
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
 
+    from .plans import process_plans
+
     while not stop['now']:
         stats = api.stats(model_name)
         pending = api.pending(model_name, args.batch)
         if not pending:
+            # Photos first, then plan sheets waiting for a title-block reading.
+            if not args.no_plans and process_plans(api, captioner, args.batch):
+                continue
             busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
             print(f'nothing pending ({stats["indexed"]}/{stats["total"]} indexed{busy})')
             if args.once:
@@ -368,6 +379,7 @@ def main() -> None:
     parser.add_argument('--batch', type=int, default=16, help='photos fetched per round')
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
+    parser.add_argument('--no-plans', action='store_true', help='skip the plan-sheet title-block queue (run photos only)')
     parser.add_argument('--ffmpeg', default=os.environ.get('FFMPEG', 'ffmpeg'), help='transcode: the ffmpeg binary')
     parser.add_argument('--ffprobe', default=os.environ.get('FFPROBE', 'ffprobe'), help='transcode: the ffprobe binary')
     parser.add_argument('--encoder', default='auto', help='transcode: auto | h264_nvenc | h264_videotoolbox | libx264')
@@ -376,7 +388,9 @@ def main() -> None:
         Api(args.api).login()
     elif args.command == 'status':
         api = Api(args.api)
-        print(json.dumps({'photos': api.stats(''), 'videos': api.request('GET', '/api/ai/videos/stats/').json()}, indent=2))
+        from .plans import stats as plan_stats
+
+        print(json.dumps({'photos': api.stats(''), 'videos': api.request('GET', '/api/ai/videos/stats/').json(), 'plans': plan_stats(api)}, indent=2))
     elif args.command == 'transcode':
         from .transcode import run_transcode
 

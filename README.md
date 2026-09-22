@@ -59,6 +59,20 @@ caption; a photo whose models fail is recorded with the tag
 name to retry). Ctrl-C stops cleanly after the current photo.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
+## Plan sheets: reading title blocks
+
+The same `run` also names plan sheets the app's text-layer detection
+couldn't (scanned prints, title blocks drawn as outlines): whenever no
+photo is pending it asks `/api/ai/plans/pending/`, shows the Qwen model
+the two views the server renders (whole page + bottom-right quarter,
+the same ones the Gemini fallback gets) with the server's own prompt,
+and posts `{sheet_number, sheet_title}` back. Only sheets with a blank
+number or the import placeholder title ("<file> p12") are queued, and
+only those fields are filled — a name a person typed is never touched.
+"Detect names" in the app on a sheet puts it back in this queue once.
+Needs `--captioner qwen` (Florence takes no free prompt); `--no-plans`
+runs photos only. `status` shows `plans: {total, pending, read_by_ai}`.
+
 ## Videos: `transcode`
 
 The same worker also encodes videos (the server only probes a clip and
@@ -221,5 +235,9 @@ AVPlayer.
 - Album grantees never see AI fields; their search covers their albums.
 
 API (company admin, bearer token): `GET /api/ai/photos/pending/?model=&limit=`,
-`POST /api/ai/photos/<id>/index/`, `GET /api/ai/photos/stats/?model=` — see
-the app repo, `backend/estimating/photo_ai_views.py`.
+`POST /api/ai/photos/<id>/index/`, `GET /api/ai/photos/stats/?model=`; plans:
+`GET /api/ai/plans/pending/?limit=&worker=` → `{prompt, sheets: [{id, page,
+views_url, …}]}`, `GET /api/ai/plans/<id>/views/` → `{full, corner}` (base64
+JPEG), `POST /api/ai/plans/<id>/detection/` `{sheet_number, sheet_title,
+model}`, `GET /api/ai/plans/stats/` — see the app repo,
+`backend/estimating/photo_ai_views.py`.
