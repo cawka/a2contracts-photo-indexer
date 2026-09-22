@@ -352,7 +352,7 @@ def run(args) -> None:
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__('now', True))
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
 
-    from .plans import process_plans
+    from .plans import process_plan_ocr, process_plans
     from .transcode import check_ffmpeg, process_videos
 
     # Videos ride along (ffmpeg drives the hardware video encoder, a
@@ -373,6 +373,8 @@ def run(args) -> None:
                 # straight back to the top so a new photo is never behind
                 # a long encode.
                 if not args.no_plans and process_plans(api, captioner, args.batch):
+                    continue
+                if not args.no_ocr and process_plan_ocr(api, max(1, args.batch // 4)):
                     continue
                 if encoder and process_videos(api, args, args.batch, stop):
                     continue
@@ -444,6 +446,7 @@ def main() -> None:
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
     parser.add_argument('--no-plans', action='store_true', help='skip the plan-sheet title-block queue')
+    parser.add_argument('--no-ocr', action='store_true', help='skip OCR of scanned plan pages')
     parser.add_argument('--no-videos', action='store_true', help='skip video encoding in `run` (the `transcode` command still does it alone)')
     parser.add_argument('--ffmpeg', default=os.environ.get('FFMPEG', 'ffmpeg'), help='transcode: the ffmpeg binary')
     parser.add_argument('--ffprobe', default=os.environ.get('FFPROBE', 'ffprobe'), help='transcode: the ffprobe binary')
@@ -453,9 +456,9 @@ def main() -> None:
         Api(args.api).login()
     elif args.command == 'status':
         api = Api(args.api)
-        from .plans import stats as plan_stats
+        from .plans import ocr_stats, stats as plan_stats
 
-        print(json.dumps({'photos': api.stats(''), 'videos': api.request('GET', '/api/ai/videos/stats/').json(), 'plans': plan_stats(api)}, indent=2))
+        print(json.dumps({'photos': api.stats(''), 'videos': api.request('GET', '/api/ai/videos/stats/').json(), 'plans': plan_stats(api), 'plan_ocr': ocr_stats(api)}, indent=2))
     elif args.command == 'transcode':
         from .transcode import run_transcode
 

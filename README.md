@@ -85,6 +85,16 @@ only those fields are filled — a name a person typed is never touched.
 Needs `--captioner qwen` (Florence takes no free prompt); `--no-plans`
 runs photos only. `status` shows `plans: {total, pending, read_by_ai}`.
 
+**Scanned sheets** have no text layer at all, so the app's "search
+inside the pages" can't read them either. With `pip install
+'a2contracts-photo-indexer[ocr]'` (RapidOCR: ONNX, CPU, no system
+packages) the same `run` also works through
+`/api/ai/plans/ocr/pending/`: it fetches the page image the server
+renders, OCRs it, and posts every word with its box, which is what the
+plan viewer highlights. Without that extra the queue is skipped with a
+one-line notice; `--no-ocr` skips it deliberately. `status` shows
+`plan_ocr: {total, pending, ocr_done}`.
+
 ## Videos
 
 The same worker also encodes videos (the server only probes a clip and
