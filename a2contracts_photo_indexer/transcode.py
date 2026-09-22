@@ -31,6 +31,8 @@ import time
 import zipfile
 from pathlib import Path
 
+import requests
+
 CHUNK = 8 * 1024 * 1024
 LADDER = [(1920, 1080, '6000k'), (1280, 720, '3000k'), (854, 480, '1200k')]
 
@@ -178,57 +180,83 @@ def download(api, url: str, dest: str) -> None:
             f.write(chunk)
 
 
-def run_transcode(api, args) -> None:
+def check_ffmpeg(args) -> str | None:
+    """The encoder name, or None (with a printed reason) when ffmpeg/
+    ffprobe are missing -- `run` then simply skips videos."""
+    if not shutil.which(args.ffmpeg) or not shutil.which(args.ffprobe):
+        print('ffmpeg/ffprobe not found on the PATH (brew install ffmpeg / apt install ffmpeg) -- videos will wait.', file=sys.stderr)
+        return None
+    return pick_encoder(args.ffmpeg, args.encoder)[0]
+
+
+def process_videos(api, args, limit: int, stop: dict | None = None) -> int:
+    """One round: encodes up to `limit` pending videos. Returns how many
+    were taken (0 = nothing pending). `stop['now']` hands back what is
+    left mid-batch."""
+    from .indexer import WORKER
+
     ffmpeg, ffprobe = args.ffmpeg, args.ffprobe
-    if not shutil.which(ffmpeg) or not shutil.which(ffprobe):
-        sys.exit('ffmpeg/ffprobe not found on the PATH (brew install ffmpeg / apt install ffmpeg).')
-    print(f'encoder: {pick_encoder(ffmpeg, args.encoder)[0]}')
+    r = api.request('GET', f'/api/ai/videos/pending/?limit={limit}&worker={WORKER}')
+    r.raise_for_status()
+    pending = r.json()
+    if not pending:
+        return 0
+    stats = api.request('GET', '/api/ai/videos/stats/').json()
+    print(f'{stats["pending"]} video(s) pending; taking {len(pending)}')
+    for n, row in enumerate(pending):
+        if stop and stop['now']:
+            api.release('transcode', [r['id'] for r in pending[n:]])
+            return len(pending)
+        started = time.time()
+        with tempfile.TemporaryDirectory(prefix='a2-video-') as tmp:
+            try:
+                src = os.path.join(tmp, 'source.bin')
+                download(api, row['url'], src)
+                if row['wanted'] == 'mp4':
+                    out = os.path.join(tmp, 'out.mp4')
+                    done = encode_mp4(ffmpeg, ffprobe, src, out, args.encoder)
+                    meta = {'filename': f"{row['id']}-{done['height']}p.mp4", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'mp4', 'label': f"{done['height']}p", 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}
+                    tus_upload(api, out, meta)
+                else:
+                    folder = os.path.join(tmp, 'hls')
+                    os.makedirs(folder)
+                    done = encode_hls(ffmpeg, ffprobe, src, folder, args.encoder)
+                    out = os.path.join(tmp, 'hls.zip')
+                    zip_folder(folder, out)
+                    meta = {'filename': f"{row['id']}-hls.zip", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'hls', 'label': 'hls', 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}
+                    tus_upload(api, out, meta)
+                print(f"#{row['id']} {row['project_name'][:30]:30s} {row['wanted']} {time.time() - started:6.1f}s  {done['width']}x{done['height']} {done['encoder']}")
+            except Exception as exc:  # noqa: BLE001 -- one bad clip must not stop the run
+                print(f"#{row['id']} FAILED: {exc}", file=sys.stderr)
+                time.sleep(2)
+    return len(pending)
+
+
+def run_transcode(api, args) -> None:
+    """`transcode`: videos only (the `run` loop does them too, after
+    photos and plan sheets)."""
+    encoder = check_ffmpeg(args)
+    if encoder is None:
+        sys.exit(1)
+    print(f'encoder: {encoder}')
     stop = {'now': False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__('now', True))
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
     while not stop['now']:
-        from .indexer import WORKER
-
-        r = api.request('GET', f'/api/ai/videos/pending/?limit={args.batch}&worker={WORKER}')
-        r.raise_for_status()
-        pending = r.json()
-        stats = api.request('GET', '/api/ai/videos/stats/').json()
-        if not pending:
-            busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
-            print(f'nothing pending ({stats["encoded"]}/{stats["total"]} videos encoded{busy})')
-            if args.once:
-                return
-            for _ in range(args.interval):
-                if stop['now']:
-                    return
-                time.sleep(1)
+        try:
+            taken = process_videos(api, args, args.batch, stop)
+        except requests.RequestException as exc:
+            print(f'server unreachable ({exc.__class__.__name__}) -- retrying in 30s', file=sys.stderr)
+            time.sleep(30)
             continue
-        print(f'{stats["pending"]} pending; taking {len(pending)}')
-        for n, row in enumerate(pending):
-            if stop['now']:
-                api.release('transcode', [r['id'] for r in pending[n:]])
-                return
-            started = time.time()
-            with tempfile.TemporaryDirectory(prefix='a2-video-') as tmp:
-                try:
-                    src = os.path.join(tmp, 'source.bin')
-                    download(api, row['url'], src)
-                    if row['wanted'] == 'mp4':
-                        out = os.path.join(tmp, 'out.mp4')
-                        done = encode_mp4(ffmpeg, ffprobe, src, out, args.encoder)
-                        meta = {'filename': f"{row['id']}-{done['height']}p.mp4", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'mp4', 'label': f"{done['height']}p", 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}
-                        tus_upload(api, out, meta)
-                    else:
-                        folder = os.path.join(tmp, 'hls')
-                        os.makedirs(folder)
-                        done = encode_hls(ffmpeg, ffprobe, src, folder, args.encoder)
-                        out = os.path.join(tmp, 'hls.zip')
-                        zip_folder(folder, out)
-                        meta = {'filename': f"{row['id']}-hls.zip", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'hls', 'label': 'hls', 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}
-                        tus_upload(api, out, meta)
-                    print(f"#{row['id']} {row['project_name'][:30]:30s} {row['wanted']} {time.time() - started:6.1f}s  {done['width']}x{done['height']} {done['encoder']}")
-                except Exception as exc:  # noqa: BLE001 -- one bad clip must not stop the run
-                    print(f"#{row['id']} FAILED: {exc}", file=sys.stderr)
-                    time.sleep(2)
+        if taken:
+            continue  # straight back for the next batch; --once means "until the queue is empty", not one batch
+        stats = api.request('GET', '/api/ai/videos/stats/').json()
+        busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
+        print(f'nothing pending ({stats["encoded"]}/{stats["total"]} videos encoded{busy})')
         if args.once:
             return
+        for _ in range(args.interval):
+            if stop['now']:
+                return
+            time.sleep(1)

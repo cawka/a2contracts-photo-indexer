@@ -66,7 +66,9 @@ a2-photo-indexer run --captioner qwen --qwen-model Qwen/Qwen3-VL-4B-Instruct --b
 `--device auto` picks cuda → mps → cpu. Each photo prints its time and
 caption; a photo whose models fail is recorded with the tag
 `indexing failed` so the queue moves on (re-run with a different model
-name to retry). Ctrl-C stops cleanly after the current photo.
+name to retry). Ctrl-C stops cleanly after the current photo. A server
+that is deploying or unreachable is waited out (30 s retries, leased
+rows handed back), never a crash and never an "indexing failed" mark.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
 ## Plan sheets: reading title blocks
@@ -83,11 +85,16 @@ only those fields are filled — a name a person typed is never touched.
 Needs `--captioner qwen` (Florence takes no free prompt); `--no-plans`
 runs photos only. `status` shows `plans: {total, pending, read_by_ai}`.
 
-## Videos: `transcode`
+## Videos
 
 The same worker also encodes videos (the server only probes a clip and
-takes a poster). `a2-photo-indexer transcode --api … [--once]` asks for
-pending videos and, per the owner's design:
+takes a poster). `run` does them as part of its rounds -- photos first,
+then plan sheets, then one batch of videos, and straight back to the
+top so a new photo never waits behind a long encode (`--no-videos`
+opts out; ffmpeg drives the hardware video encoder, so the models stay
+loaded). `a2-photo-indexer transcode --api … [--once]` does videos
+alone; either way `--once` means "until the queue is empty", not one
+batch. Per the owner's design:
 
 - a **short clip** (up to the server's `VIDEO_SHORT_SECONDS`, 3 min) → one
   H.264 MP4, capped at 1080p, for browsers that can't decode the iPhone's

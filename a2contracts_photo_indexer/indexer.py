@@ -353,14 +353,37 @@ def run(args) -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
 
     from .plans import process_plans
+    from .transcode import check_ffmpeg, process_videos
+
+    # Videos ride along (ffmpeg drives the hardware video encoder, a
+    # different unit from the one the models sit on -- nothing unloads).
+    encoder = None if args.no_videos else check_ffmpeg(args)
+    if encoder:
+        print(f'video encoder: {encoder}')
 
     while not stop['now']:
-        stats = api.stats(model_name)
-        pending = api.pending(model_name, args.batch)
+        # The server deploys, restarts, drops a connection: none of that
+        # is a reason to die (2026-09-21, a deploy killed a run mid-poll).
+        try:
+            stats = api.stats(model_name)
+            pending = api.pending(model_name, args.batch)
+            if not pending:
+                # Photos first, then plan sheets waiting for a title-block
+                # reading, then videos to encode -- one round each, and
+                # straight back to the top so a new photo is never behind
+                # a long encode.
+                if not args.no_plans and process_plans(api, captioner, args.batch):
+                    continue
+                if encoder and process_videos(api, args, args.batch, stop):
+                    continue
+        except requests.RequestException as exc:
+            print(f'server unreachable ({exc.__class__.__name__}) -- retrying in 30s', file=sys.stderr)
+            for _ in range(30):
+                if stop['now']:
+                    return
+                time.sleep(1)
+            continue
         if not pending:
-            # Photos first, then plan sheets waiting for a title-block reading.
-            if not args.no_plans and process_plans(api, captioner, args.batch):
-                continue
             busy = f', {stats["in_progress"]} with other workers' if stats.get('in_progress') else ''
             print(f'nothing pending ({stats["indexed"]}/{stats["total"]} indexed{busy})')
             if args.once:
@@ -389,6 +412,13 @@ def run(args) -> None:
                     payload['tags'] = list(dict.fromkeys([*tags, *vocab_tags]))
                 api.post_index(row['id'], payload)
                 print(f"#{row['id']} {row['project_name'][:30]:30s} {time.time() - started:5.1f}s  {caption[:70]}")
+            except requests.RequestException as exc:
+                # The server, not the photo: hand the rest back and wait
+                # for it (never record "indexing failed" for a deploy).
+                print(f"server unreachable ({exc.__class__.__name__}) -- handing back {len(pending) - n} photo(s), retrying in 30s", file=sys.stderr)
+                api.release('index', [r['id'] for r in pending[n:]])
+                time.sleep(30)
+                break
             except Exception as exc:  # noqa: BLE001 -- one bad photo must not stop the run
                 print(f"#{row['id']} FAILED: {exc}", file=sys.stderr)
                 # Mark it so the queue moves on; the caption says why.
@@ -413,7 +443,8 @@ def main() -> None:
     parser.add_argument('--batch', type=int, default=16, help='photos fetched per round')
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
-    parser.add_argument('--no-plans', action='store_true', help='skip the plan-sheet title-block queue (run photos only)')
+    parser.add_argument('--no-plans', action='store_true', help='skip the plan-sheet title-block queue')
+    parser.add_argument('--no-videos', action='store_true', help='skip video encoding in `run` (the `transcode` command still does it alone)')
     parser.add_argument('--ffmpeg', default=os.environ.get('FFMPEG', 'ffmpeg'), help='transcode: the ffmpeg binary')
     parser.add_argument('--ffprobe', default=os.environ.get('FFPROBE', 'ffprobe'), help='transcode: the ffprobe binary')
     parser.add_argument('--encoder', default='auto', help='transcode: auto | h264_nvenc | h264_videotoolbox | libx264')
