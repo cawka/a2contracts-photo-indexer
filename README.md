@@ -98,9 +98,10 @@ one-line notice; `--no-ocr` skips it deliberately. `status` shows
 
 ## Daily reports: writing the note
 
-A project's daily report in the app has a note at the top. When a draft
-has content the app queues it at `/api/ai/reports/pending/`; `run` picks
-it up right after photos (someone may be looking at the draft), gives the
+A project's daily report in the app has a note at the top. When the
+project manager presses "Write note" on the draft, the app queues it at
+`/api/ai/reports/pending/`; `run` picks it up right after photos (within
+the usual idle interval) and gives the
 Qwen model the server's prompt, the draft as plain text (photos with what
 this indexer already saw in them, permit/inspection changes, new plan
 sheets, 3D models) and up to four of the day's photos, and posts the note
