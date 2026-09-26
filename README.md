@@ -172,10 +172,15 @@ loginctl enable-linger $USER          # keep it running with nobody logged in
 journalctl --user -u a2-photo-indexer -f
 ```
 
-### macOS -- launchd agent (every 30 minutes while the Mac is awake)
+### macOS -- launchd agent
 
-`~/Library/LaunchAgents/com.a2cons.photo-indexer.plist` (adjust the two
-paths to where the repo is; `StartInterval` is seconds):
+Two options, same file: `~/Library/LaunchAgents/com.a2cons.photo-indexer.plist`
+(adjust the paths to where the repo is). Pick one.
+
+#### Option A: every 30 minutes while the Mac is awake
+
+Each run loads the models, drains the queue and exits, so memory is
+free between runs; new photos wait up to `StartInterval` seconds.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -211,6 +216,43 @@ on wake, so a laptop simply catches up when it is opened. Two runs never
 overlap (launchd starts the next only after the previous exited). The
 first run downloads the models (a few GB) -- do that one from a terminal
 with `a2-photo-indexer run --once` so you can watch it.
+
+#### Option B: always on (daemon)
+
+Keeps the models loaded (~16 GB for the default Qwen captioner) and
+picks up new photos within `--interval` seconds (default 120). Same
+plist as above, with `--once` dropped and `StartInterval` swapped for
+`KeepAlive`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.a2cons.photo-indexer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/cawka/Devel/a2contracts-photo-indexer/.venv/bin/a2-photo-indexer</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>A2_API</key><string>https://contracts.a2cons.com</string></dict>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
+  <key>StandardErrorPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
+</dict>
+</plist>
+```
+
+Install, watch and remove it with the same `launchctl` commands. After
+editing the plist, `bootout` then `bootstrap` again -- launchd reads it
+only on load. `KeepAlive` restarts the process whenever it exits
+(`ThrottleInterval` keeps a crash at startup from reloading the models
+every few seconds), so stop it with `bootout`, not `kill`. A server
+that is down or deploying is retried every 30s in-process; when the Mac
+sleeps the process is frozen and carries on after wake.
 
 ### Windows 11 -- Task Scheduler (every 30 minutes)
 
