@@ -10,6 +10,9 @@ For each pending video (GET /api/ai/videos/pending/):
   - `wanted: hls`  (a long video) -> an HLS ladder (1080p / 720p / 480p,
        capped at the source), 6-second segments, one master playlist,
        uploaded as a ZIP of the folder.
+  - `wanted: loop` (once the above exists) -> LOOP_SECONDS of silent
+       H.264, at most 640 px on the long side, for the looping tiles of a
+       daily report. Only asked of a worker that sends `loops=1`.
 An HDR source (PQ/HLG) is tone-mapped to SDR BT.709 -- the same color
 trap as the stills; without it the picture is washed out. Needs an
 ffmpeg with `zscale` (libzimg) for that: Homebrew's and Ubuntu's have
@@ -108,6 +111,26 @@ def encode_mp4(ffmpeg: str, ffprobe: str, src: str, out: str, encoder: str) -> d
     return {'width': done['width'], 'height': done['height'], 'encoder': name}
 
 
+LOOP_SECONDS = 3
+
+
+def encode_loop(ffmpeg: str, ffprobe: str, src: str, out: str, encoder: str) -> dict:
+    """A few silent seconds, small: a daily report's looping tile. Skips
+    the first half second of a longer clip (the phone still settling)."""
+    info = probe(ffprobe, src)
+    name, flags = pick_encoder(ffmpeg, encoder)
+    start = ['-ss', '0.5'] if (info.get('duration') or 0) > LOOP_SECONDS + 1 else []
+    fit = "scale='if(gt(iw,ih),min(640,iw),-2)':'if(gt(iw,ih),-2,min(640,ih))',scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    vf = video_filter(ffmpeg, info['hdr'], None).replace('format=yuv420p', f'{fit},fps=30,format=yuv420p')
+    cmd = [ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', *start, '-i', src, '-t', str(LOOP_SECONDS), '-map', '0:v:0', '-an',
+           '-vf', vf, '-c:v', name, *flags, '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-map_metadata', '-1', out]
+    result = _run(cmd, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f'ffmpeg failed: {result.stderr.strip()[-400:]}')
+    done = probe(ffprobe, out)
+    return {'width': done['width'], 'height': done['height'], 'encoder': name}
+
+
 def encode_hls(ffmpeg: str, ffprobe: str, src: str, folder: str, encoder: str) -> dict:
     info = probe(ffprobe, src)
     name, flags = pick_encoder(ffmpeg, encoder)
@@ -196,13 +219,14 @@ def process_videos(api, args, limit: int, stop: dict | None = None) -> int:
     from .indexer import WORKER
 
     ffmpeg, ffprobe = args.ffmpeg, args.ffprobe
-    r = api.request('GET', f'/api/ai/videos/pending/?limit={limit}&worker={WORKER}')
+    r = api.request('GET', f'/api/ai/videos/pending/?limit={limit}&worker={WORKER}&loops=1')
     r.raise_for_status()
     pending = r.json()
     if not pending:
         return 0
     stats = api.request('GET', '/api/ai/videos/stats/').json()
-    print(f'{stats["pending"]} video(s) pending; taking {len(pending)}')
+    loops = f' + {stats["loops_pending"]} loop clip(s)' if stats.get('loops_pending') else ''
+    print(f'{stats["pending"]} video(s){loops} pending; taking {len(pending)}')
     for n, row in enumerate(pending):
         if stop and stop['now']:
             api.release('transcode', [r['id'] for r in pending[n:]])
@@ -212,7 +236,12 @@ def process_videos(api, args, limit: int, stop: dict | None = None) -> int:
             try:
                 src = os.path.join(tmp, 'source.bin')
                 download(api, row['url'], src)
-                if row['wanted'] == 'mp4':
+                if row['wanted'] == 'loop':
+                    out = os.path.join(tmp, 'loop.mp4')
+                    done = encode_loop(ffmpeg, ffprobe, src, out, args.encoder)
+                    meta = {'filename': f"{row['id']}-loop.mp4", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'loop', 'label': 'loop', 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}
+                    tus_upload(api, out, meta)
+                elif row['wanted'] == 'mp4':
                     out = os.path.join(tmp, 'out.mp4')
                     done = encode_mp4(ffmpeg, ffprobe, src, out, args.encoder)
                     meta = {'filename': f"{row['id']}-{done['height']}p.mp4", 'purpose': 'video-rendition', 'photo': row['id'], 'kind': 'mp4', 'label': f"{done['height']}p", 'width': done['width'], 'height': done['height'], 'encoder': done['encoder']}

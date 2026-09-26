@@ -124,7 +124,11 @@ batch. Per the owner's design:
   H.264 MP4, capped at 1080p, for browsers that can't decode the iPhone's
   HEVC (iOS/Safari keep playing the original by byte range);
 - a **long video** → an HLS ladder (1080p / 720p / 480p, capped at the
-  source), 6-second segments, uploaded as a ZIP of the folder.
+  source), 6-second segments, uploaded as a ZIP of the folder;
+- then, for every video, a **loop clip**: 3 silent seconds, at most 640 px
+  on the long side, for the looping tiles of the app's daily reports
+  (tens of KB; the worker asks for these with `loops=1`, so an older
+  worker is never handed one).
 
 HDR sources (PQ/HLG) are tone-mapped to SDR — needs an ffmpeg with the
 `zscale` filter (libzimg): Homebrew's and Ubuntu's `ffmpeg` have it, some
