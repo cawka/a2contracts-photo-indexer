@@ -205,6 +205,8 @@ Mac sleeps the process is frozen and carries on after wake.
 linux/install.sh daemon          # or: interval
 journalctl --user -u a2-photo-indexer -f          # daemon
 journalctl --user -u a2-photo-indexer-once -f     # interval
+systemctl --user restart a2-photo-indexer         # restart (daemon)
+systemctl --user start a2-photo-indexer-once      # run a pass now (interval)
 linux/install.sh remove
 ```
 
@@ -236,12 +238,69 @@ Start-ScheduledTask "A2 photo indexer"                                  # run it
 powershell -ExecutionPolicy Bypass -File win11\install.ps1 remove
 ```
 
+(Restarting on Windows needs one more step -- see below.)
+
 It registers the task "A2 photo indexer" for your user, logging to
 `%USERPROFILE%\a2-photo-indexer.log`. Interval: every 30 minutes, a
 missed run starts as soon as possible, and a long pass is never doubled.
 Daemon: starts at logon and is restarted a minute after it exits. Both
 run only while you are signed in; for signed-out runs, open the task in
 the Task Scheduler app and pick "Run whether user is logged on or not".
+
+## Updating, restarting, stopping
+
+**After pulling a new version** (`git pull` in the repo): the package is
+installed with `pip install -e`, so the new code is used as soon as the
+process starts again -- nothing to reinstall. Run `pip install -e .`
+(with the same extras as at setup, e.g. `.[ocr]` / `.[cuda,ocr]`) only
+when `pyproject.toml` changed (a new dependency). Then:
+
+- **interval** mode: nothing to do -- the next pass (within 30 minutes)
+  starts the new code. The "run now" commands below start one at once.
+- **daemon** mode: the running process keeps the OLD code (and the
+  loaded models) until it is restarted -- restart it.
+
+A restart unloads the models; the next start loads them again (a minute
+or two with Qwen, no download). Anything the old process had taken from
+the server's queues but not finished goes back to the queue when its
+lease runs out, so nothing is lost.
+
+**macOS** (launchd):
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer   # restart now (daemon), or run a pass now (interval)
+launchctl bootout gui/$(id -u)/com.a2cons.photo-indexer        # stop until you start it again...
+macOS/install.sh daemon                                        # ...with this (or: interval)
+launchctl print gui/$(id -u)/com.a2cons.photo-indexer | grep -E 'state|pid'   # is it running?
+```
+
+`kickstart -k` kills the running process and starts it again right away.
+Don't `kill` the daemon yourself: `KeepAlive` just starts it again.
+`bootout` is the stop that sticks (until the next `install.sh` or a
+reboot -- the agent loads again at login).
+
+**Linux** (systemd user unit):
+
+```sh
+systemctl --user restart a2-photo-indexer         # restart (daemon)
+systemctl --user start a2-photo-indexer-once      # run a pass now (interval)
+systemctl --user stop a2-photo-indexer            # stop until the next start/reboot (daemon)
+systemctl --user stop a2-photo-indexer-once.timer # pause the 30-minute passes (interval)
+systemctl --user status a2-photo-indexer          # is it running?
+```
+
+**Windows 11** (Task Scheduler): stopping the task ends its `cmd.exe`,
+but not always the indexer process under it, so stop that explicitly:
+
+```powershell
+Stop-ScheduledTask "A2 photo indexer"
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*a2-photo-indexer*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-ScheduledTask "A2 photo indexer"                   # start again (skip this line to just stop)
+Get-ScheduledTask "A2 photo indexer" | Select-Object State   # Running / Ready
+```
+
+A daemon-mode task stopped this way stays stopped until the next logon
+or `Start-ScheduledTask`.
 
 ## What the app does with it
 
