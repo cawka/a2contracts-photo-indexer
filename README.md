@@ -72,25 +72,27 @@ that is deploying or unreachable is waited out (30 s retries, leased
 rows handed back), never a crash and never an "indexing failed" mark.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
-## Restart after an update
+## Updating and restarting: the helper scripts
 
-After `git pull` (and `pip install -e .` only if `pyproject.toml` changed),
-restart the installed worker so it runs the new code:
+Once the worker is installed (see "Running on a schedule"), one script per
+OS does the day-to-day:
 
 ```sh
-launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer    # macOS
-systemctl --user restart a2-photo-indexer                        # Linux (daemon)
+macOS/indexer.sh update     # git pull; pip install only if pyproject.toml changed; restart
+macOS/indexer.sh restart    # new code / models reload
+macOS/indexer.sh stop       # stays stopped until `start` (or the next login)
+macOS/indexer.sh start
+macOS/indexer.sh status     # running?, since when, last log lines
+macOS/indexer.sh log        # follow the log
 ```
 
 ```powershell
-# Windows 11
-Stop-ScheduledTask "A2 photo indexer"
-Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*a2-photo-indexer*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-Start-ScheduledTask "A2 photo indexer"
+powershell -ExecutionPolicy Bypass -File win11\indexer.ps1 update    # same commands: update|restart|stop|start|status|log
 ```
 
-Interval mode needs nothing (the next pass runs the new code). Stopping,
-status and the details per OS: [Updating, restarting, stopping](#updating-restarting-stopping).
+`update` reinstalls with the extras `ocr` (Mac) / `cuda,ocr` (Windows);
+set `A2_INDEXER_EXTRAS` to change that. What they do underneath, and the
+Linux commands: [Updating, restarting, stopping](#updating-restarting-stopping).
 
 ## Plan sheets: reading title blocks
 
