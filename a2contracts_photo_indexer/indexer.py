@@ -452,6 +452,9 @@ def main() -> None:
     parser.add_argument('--ffprobe', default=os.environ.get('FFPROBE', 'ffprobe'), help='transcode: the ffprobe binary')
     parser.add_argument('--encoder', default='auto', help='transcode: auto | h264_nvenc | h264_videotoolbox | libx264')
     args = parser.parse_args()
+    # Under launchd/systemd/Task Scheduler stdout is a file or pipe, which
+    # Python block-buffers: progress lines would lag minutes behind stderr.
+    sys.stdout.reconfigure(line_buffering=True)
     if args.command == 'login':
         Api(args.api).login()
     elif args.command == 'status':
