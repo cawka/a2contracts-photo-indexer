@@ -72,6 +72,26 @@ that is deploying or unreachable is waited out (30 s retries, leased
 rows handed back), never a crash and never an "indexing failed" mark.
 `A2_API=https://...` in the environment saves the `--api` flag.
 
+## Restart after an update
+
+After `git pull` (and `pip install -e .` only if `pyproject.toml` changed),
+restart the installed worker so it runs the new code:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer    # macOS
+systemctl --user restart a2-photo-indexer                        # Linux (daemon)
+```
+
+```powershell
+# Windows 11
+Stop-ScheduledTask "A2 photo indexer"
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*a2-photo-indexer*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Start-ScheduledTask "A2 photo indexer"
+```
+
+Interval mode needs nothing (the next pass runs the new code). Stopping,
+status and the details per OS: [Updating, restarting, stopping](#updating-restarting-stopping).
+
 ## Plan sheets: reading title blocks
 
 The same `run` also names plan sheets the app's text-layer detection
