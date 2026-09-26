@@ -23,6 +23,10 @@ from .indexer import WORKER, load_image
 
 def pending(api) -> dict:
     r = api.request('GET', f'/api/ai/reports/pending/?worker={requests.utils.quote(WORKER)}')
+    if r.status_code == 404:
+        # A server from before daily reports: nothing to write. Raising here
+        # would read as "server unreachable" and stall the whole loop.
+        return {}
     r.raise_for_status()
     return r.json()
 
