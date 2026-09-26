@@ -353,6 +353,7 @@ def run(args) -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__('now', True))
 
     from .plans import process_plan_ocr, process_plans
+    from .reports import process_reports
     from .transcode import check_ffmpeg, process_videos
 
     # Videos ride along (ffmpeg drives the hardware video encoder, a
@@ -368,10 +369,13 @@ def run(args) -> None:
             stats = api.stats(model_name)
             pending = api.pending(model_name, args.batch)
             if not pending:
-                # Photos first, then plan sheets waiting for a title-block
-                # reading, then videos to encode -- one round each, and
-                # straight back to the top so a new photo is never behind
-                # a long encode.
+                # Photos first, then daily-report notes (someone may be
+                # waiting on the draft), then plan sheets waiting for a
+                # title-block reading, then videos to encode -- one round
+                # each, and straight back to the top so a new photo is
+                # never behind a long encode.
+                if not args.no_reports and process_reports(api, captioner):
+                    continue
                 if not args.no_plans and process_plans(api, captioner, args.batch):
                     continue
                 if not args.no_ocr and process_plan_ocr(api, max(1, args.batch // 4)):
@@ -446,6 +450,7 @@ def main() -> None:
     parser.add_argument('--interval', type=int, default=120, help='seconds to wait when nothing is pending')
     parser.add_argument('--once', action='store_true', help='one pass, then exit')
     parser.add_argument('--no-plans', action='store_true', help='skip the plan-sheet title-block queue')
+    parser.add_argument('--no-reports', action='store_true', help='skip writing daily-report notes')
     parser.add_argument('--no-ocr', action='store_true', help='skip OCR of scanned plan pages')
     parser.add_argument('--no-videos', action='store_true', help='skip video encoding in `run` (the `transcode` command still does it alone)')
     parser.add_argument('--ffmpeg', default=os.environ.get('FFMPEG', 'ffmpeg'), help='transcode: the ffmpeg binary')

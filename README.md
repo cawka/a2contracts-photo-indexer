@@ -96,6 +96,18 @@ plan viewer highlights. Without that extra the queue is skipped with a
 one-line notice; `--no-ocr` skips it deliberately. `status` shows
 `plan_ocr: {total, pending, ocr_done}`.
 
+## Daily reports: writing the note
+
+A project's daily report in the app has a note at the top. When a draft
+has content the app queues it at `/api/ai/reports/pending/`; `run` picks
+it up right after photos (someone may be looking at the draft), gives the
+Qwen model the server's prompt, the draft as plain text (photos with what
+this indexer already saw in them, permit/inspection changes, new plan
+sheets, 3D models) and up to four of the day's photos, and posts the note
+back to `/api/ai/reports/<id>/suggestion/`. The app fills the draft's note
+with it unless a person already wrote one (then it's offered as a
+suggestion). Needs `--captioner qwen`; `--no-reports` skips it.
+
 ## Videos
 
 The same worker also encodes videos (the server only probes a clip and
