@@ -1,0 +1,14 @@
+# Always on: `run` keeps the models loaded and polls every 2 minutes.
+# Installed by linux/install.sh daemon (REPO is filled in).
+[Unit]
+Description=A2 Contracts photo indexer
+After=network-online.target
+
+[Service]
+Environment=A2_API=https://contracts.a2cons.com
+ExecStart=REPO/.venv/bin/a2-photo-indexer run
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=default.target

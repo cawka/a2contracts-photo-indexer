@@ -34,8 +34,9 @@ python3 -m venv .venv && source .venv/bin/activate
 # torch for your hardware -- pick one:
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # NVIDIA (CUDA 12.8)
 pip install torch torchvision                                                       # Apple silicon (MPS) / CPU
-pip install -e .            # Mac
-pip install -e '.[cuda]'    # NVIDIA: adds bitsandbytes for 4-bit weights
+pip install -e '.[ocr]'         # Mac
+pip install -e '.[cuda,ocr]'    # NVIDIA: adds bitsandbytes for 4-bit weights
+brew install ffmpeg             # or: apt install ffmpeg -- video renditions
 a2-photo-indexer login --api https://contracts.a2cons.com      # email, password, MFA code
 ```
 
@@ -86,9 +87,9 @@ Needs `--captioner qwen` (Florence takes no free prompt); `--no-plans`
 runs photos only. `status` shows `plans: {total, pending, read_by_ai}`.
 
 **Scanned sheets** have no text layer at all, so the app's "search
-inside the pages" can't read them either. With `pip install
-'a2contracts-photo-indexer[ocr]'` (RapidOCR: ONNX, CPU, no system
-packages) the same `run` also works through
+inside the pages" can't read them either. With the `[ocr]` extra
+(RapidOCR: ONNX, CPU, no system packages; `rapidocr-onnxruntime` up to
+Python 3.12, its successor `rapidocr` on 3.13+) the same `run` also works through
 `/api/ai/plans/ocr/pending/`: it fetches the page image the server
 renders, OCRs it, and posts every word with its box, which is what the
 plan viewer highlights. Without that extra the queue is skipped with a
@@ -142,119 +143,61 @@ posted, the rest of the batch is handed back to the queue at once
 
 ## Running on a schedule
 
-Two ways: keep `a2-photo-indexer run` alive (it polls every 2 minutes,
-`--interval`), or fire `run --once` every so often -- the better fit for
-a machine that sleeps, since every run processes whatever piled up and
-exits. Both need the one-time `login` on that machine first.
+Two modes, ready-made for each OS in `macOS/`, `linux/` and `win11/`:
 
-### Linux GPU box -- systemd user unit (always on)
+- **interval** -- `run --once` every 30 minutes: loads the models, drains
+  the queue, exits. Memory is free between runs; new photos wait up to
+  30 minutes. The better fit for a machine that sleeps.
+- **daemon** -- `run` always on: the models stay loaded (~16 GB with the
+  default Qwen captioner) and new photos are picked up within
+  `--interval` seconds (default 120). A server that is down or deploying
+  is retried every 30s in-process.
 
-```ini
-# ~/.config/systemd/user/a2-photo-indexer.service
-[Unit]
-Description=A2 Contracts photo indexer
-After=network-online.target
-
-[Service]
-Environment=A2_API=https://contracts.a2cons.com
-ExecStart=%h/a2contracts-photo-indexer/.venv/bin/a2-photo-indexer run
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=default.target
-```
-
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now a2-photo-indexer
-loginctl enable-linger $USER          # keep it running with nobody logged in
-journalctl --user -u a2-photo-indexer -f
-```
+Each folder's install script fills in where the repo is, replaces
+whatever mode was installed before, and starts it. Both modes need the
+one-time `login` on that machine first, and the first run downloads the
+models (a few GB) -- do that one from a terminal with
+`a2-photo-indexer run --once` so you can watch it.
 
 ### macOS -- launchd agent
 
-Two options, same file: `~/Library/LaunchAgents/com.a2cons.photo-indexer.plist`
-(adjust the paths to where the repo is). Pick one.
-
-#### Option A: every 30 minutes while the Mac is awake
-
-Each run loads the models, drains the queue and exits, so memory is
-free between runs; new photos wait up to `StartInterval` seconds.
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.a2cons.photo-indexer</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/cawka/Devel/a2contracts-photo-indexer/.venv/bin/a2-photo-indexer</string>
-    <string>run</string>
-    <string>--once</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict><key>A2_API</key><string>https://contracts.a2cons.com</string></dict>
-  <key>StartInterval</key><integer>1800</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
-  <key>StandardErrorPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
-</dict>
-</plist>
+```sh
+macOS/install.sh interval        # or: daemon
+tail -f ~/Library/Logs/a2-photo-indexer.log
+launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer   # run / restart it now
+macOS/install.sh remove
 ```
+
+It writes `~/Library/LaunchAgents/com.a2cons.photo-indexer.plist` from
+`macOS/com.a2cons.photo-indexer.{interval,daemon}.plist`. launchd reads
+the plist only when it is loaded, so after editing one, run the install
+script again. The plists set `PATH` to include `/opt/homebrew/bin`:
+launchd starts jobs with a bare `/usr/bin:/bin:...`, and without it
+Homebrew's ffmpeg is not found and videos wait.
+
+Interval: launchd skips the interval while the Mac sleeps and runs a
+missed job on wake, and never starts a run while the previous one is
+still going. Daemon: `KeepAlive` restarts the process whenever it exits
+(at most once a minute, so a crash at startup doesn't reload the models
+in a loop) -- stop it with `install.sh remove`, not `kill`. While the
+Mac sleeps the process is frozen and carries on after wake.
+
+### Linux GPU box -- systemd user unit
 
 ```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.a2cons.photo-indexer.plist   # install + start
-launchctl kickstart -k gui/$(id -u)/com.a2cons.photo-indexer                              # run it now
-tail -f ~/Library/Logs/a2-photo-indexer.log
-launchctl bootout gui/$(id -u)/com.a2cons.photo-indexer                                   # remove
+linux/install.sh daemon          # or: interval
+journalctl --user -u a2-photo-indexer -f          # daemon
+journalctl --user -u a2-photo-indexer-once -f     # interval
+linux/install.sh remove
 ```
 
-launchd skips the interval while the Mac sleeps and runs a missed job
-on wake, so a laptop simply catches up when it is opened. Two runs never
-overlap (launchd starts the next only after the previous exited). The
-first run downloads the models (a few GB) -- do that one from a terminal
-with `a2-photo-indexer run --once` so you can watch it.
+Daemon is `linux/a2-photo-indexer.service` (`Restart=always`); interval
+is `linux/a2-photo-indexer-once.service` started by
+`a2-photo-indexer-once.timer` (30 minutes after the previous pass ended;
+`Persistent=true` catches up after downtime). The script also runs
+`loginctl enable-linger` so it keeps running with nobody logged in.
 
-#### Option B: always on (daemon)
-
-Keeps the models loaded (~16 GB for the default Qwen captioner) and
-picks up new photos within `--interval` seconds (default 120). Same
-plist as above, with `--once` dropped and `StartInterval` swapped for
-`KeepAlive`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.a2cons.photo-indexer</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/cawka/Devel/a2contracts-photo-indexer/.venv/bin/a2-photo-indexer</string>
-    <string>run</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict><key>A2_API</key><string>https://contracts.a2cons.com</string></dict>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>60</integer>
-  <key>RunAtLoad</key><true/>
-  <key>StandardOutPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
-  <key>StandardErrorPath</key><string>/Users/cawka/Library/Logs/a2-photo-indexer.log</string>
-</dict>
-</plist>
-```
-
-Install, watch and remove it with the same `launchctl` commands. After
-editing the plist, `bootout` then `bootstrap` again -- launchd reads it
-only on load. `KeepAlive` restarts the process whenever it exits
-(`ThrottleInterval` keeps a crash at startup from reloading the models
-every few seconds), so stop it with `bootout`, not `kill`. A server
-that is down or deploying is retried every 30s in-process; when the Mac
-sleeps the process is frozen and carries on after wake.
-
-### Windows 11 -- Task Scheduler (every 30 minutes)
+### Windows 11 -- Task Scheduler
 
 Install (PowerShell, in the cloned repo):
 
@@ -262,33 +205,26 @@ Install (PowerShell, in the cloned repo):
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128   # NVIDIA
-pip install -e .[cuda]
-setx A2_API https://contracts.a2cons.com                                             # for future shells and the task
+pip install -e .[cuda,ocr]
 a2-photo-indexer login
 a2-photo-indexer run --once                                                          # first run: model download
 ```
 
-The token file is `%USERPROFILE%\.a2contracts\photo-indexer.json`. Then
-schedule it (one line, PowerShell, adjust the path):
+The token file is `%USERPROFILE%\.a2contracts\photo-indexer.json`. Then:
 
 ```powershell
-schtasks /Create /TN "A2 photo indexer" /SC MINUTE /MO 30 /F `
-  /TR "\"$env:USERPROFILE\a2contracts-photo-indexer\.venv\Scripts\a2-photo-indexer.exe\" run --once --api https://contracts.a2cons.com"
-schtasks /Run /TN "A2 photo indexer"       # run it now
-schtasks /Query /TN "A2 photo indexer" /V /FO LIST | findstr /C:"Last Run" /C:"Last Result"
-schtasks /Delete /TN "A2 photo indexer" /F  # remove
+powershell -ExecutionPolicy Bypass -File win11\install.ps1 interval   # or: daemon
+Get-Content -Wait $env:USERPROFILE\a2-photo-indexer.log
+Start-ScheduledTask "A2 photo indexer"                                  # run it now
+powershell -ExecutionPolicy Bypass -File win11\install.ps1 remove
 ```
 
-Or in the Task Scheduler app: Create Task → Triggers: "Daily, repeat
-every 30 minutes for a duration of 1 day" → Actions: the
-`.venv\Scripts\a2-photo-indexer.exe` above with arguments
-`run --once --api https://contracts.a2cons.com` → Settings: tick "Run
-task as soon as possible after a scheduled start is missed" and "Do not
-start a new instance" (so a long pass is never doubled). Leave "Run only
-when user is logged on" unless you also want it while signed out (then
-it asks for your Windows password and runs without a console). Output
-goes nowhere by default: add `>> %USERPROFILE%\a2-photo-indexer.log 2>&1`
-to the arguments through `cmd /c "... "` if you want a log.
+It registers the task "A2 photo indexer" for your user, logging to
+`%USERPROFILE%\a2-photo-indexer.log`. Interval: every 30 minutes, a
+missed run starts as soon as possible, and a long pass is never doubled.
+Daemon: starts at logon and is restarted a minute after it exits. Both
+run only while you are signed in; for signed-out runs, open the task in
+the Task Scheduler app and pick "Run whether user is logged on or not".
 
 ## What the app does with it
 

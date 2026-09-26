@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- REPO and HOME are filled in by macOS/install.sh -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.a2cons.photo-indexer</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPO/.venv/bin/a2-photo-indexer</string>
+    <string>run</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>A2_API</key><string>https://contracts.a2cons.com</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>HOME/Library/Logs/a2-photo-indexer.log</string>
+  <key>StandardErrorPath</key><string>HOME/Library/Logs/a2-photo-indexer.log</string>
+</dict>
+</plist>

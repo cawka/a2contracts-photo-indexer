@@ -99,14 +99,22 @@ def _ocr_engine():
     if _OCR['tried']:
         return _OCR['engine']
     _OCR['tried'] = True
+    # rapidocr-onnxruntime stops at Python 3.12; its successor `rapidocr`
+    # (3.x, on onnxruntime) covers newer Pythons.
     try:
-        from rapidocr_onnxruntime import RapidOCR
+        from rapidocr import RapidOCR
 
         _OCR['engine'] = RapidOCR()
-        _OCR['name'] = 'rapidocr-onnxruntime'
-    except Exception as exc:  # noqa: BLE001 -- optional dependency
-        print(f'plan OCR off (pip install rapidocr-onnxruntime to turn it on): {exc}', file=sys.stderr)
-        _OCR['engine'] = None
+        _OCR['name'] = 'rapidocr'
+    except Exception:  # noqa: BLE001 -- optional dependency
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+
+            _OCR['engine'] = RapidOCR()
+            _OCR['name'] = 'rapidocr-onnxruntime'
+        except Exception as exc:  # noqa: BLE001
+            print(f'plan OCR off (pip install ".[ocr]" to turn it on): {exc}', file=sys.stderr)
+            _OCR['engine'] = None
     return _OCR['engine']
 
 
@@ -163,10 +171,14 @@ def _read(engine, image_bytes: bytes):
 
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     array = np.asarray(image)
-    result, _ = engine(array)
+    result = engine(array)
+    if hasattr(result, 'txts'):  # rapidocr 3.x: an output object
+        entries = zip(result.boxes if result.boxes is not None else [], result.txts or ())
+    else:  # rapidocr-onnxruntime: (list of [box, text, score], timings)
+        entries = ((e[0], e[1]) for e in result[0] or [])
     words = []
-    for entry in result or []:
-        box, text = entry[0], str(entry[1] or '').strip()
+    for box, text in entries:
+        text = str(text or '').strip()
         if not text:
             continue
         xs = [float(p[0]) for p in box]

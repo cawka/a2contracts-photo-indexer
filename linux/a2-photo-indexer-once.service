@@ -1,0 +1,10 @@
+# One pass: `run --once` drains the queue and exits. Started by
+# a2-photo-indexer-once.timer. Installed by linux/install.sh interval.
+[Unit]
+Description=A2 Contracts photo indexer (one pass)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=A2_API=https://contracts.a2cons.com
+ExecStart=REPO/.venv/bin/a2-photo-indexer run --once

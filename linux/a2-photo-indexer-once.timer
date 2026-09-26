@@ -1,0 +1,11 @@
+# Every 30 minutes; a pass missed while the machine was off runs on boot.
+[Unit]
+Description=A2 Contracts photo indexer every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
